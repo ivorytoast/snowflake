@@ -16,7 +16,7 @@ type Sheet struct {
 	id string
 	versionNum int
 	creationTime time.Time
-	payload string
+	payload Payload
 	isCurrentId bool
 	tags [3]string
 }
@@ -45,23 +45,20 @@ func main() {
 	}
 	defer conn.Close(context.Background())
 
-	rows, err := conn.Query(context.Background(), "SELECT * FROM sheets")
-	if err != nil {
-		log.Fatal(err)
+	sheets := getAllSheets(conn)
+
+	for _, sheet := range sheets {
+		fmt.Println(sheet.id)
+		fmt.Println(sheet.versionNum)
+		fmt.Println(sheet.creationTime)
+		fmt.Println(sheet.tags)
+		fmt.Println(sheet.payload.Scale)
+		fmt.Println(sheet.payload.Title)
+		fmt.Println("")
+		fmt.Println("")
 	}
-	defer rows.Close()
-	for rows.Next() {
-		var s Sheet
-		if err := rows.Scan(&s.id, &s.versionNum, &s.creationTime, &s.payload, &s.isCurrentId, &s.tags); err != nil {
-			log.Fatal(err)
-		}
-		b, err := json.Marshal(s.payload)
-		if err != nil {
-			log.Fatal("Unable to marshall object into json...")
-		}
-		fmt.Printf("%s %d %s %v %v\n",s.id, s.versionNum, s.creationTime, s.isCurrentId, s.tags)
-		fmt.Println(string(b))
-	}
+
+
 
 	//fmt.Println("Initial balances:")
 	//getBalances(conn)
@@ -77,6 +74,38 @@ func main() {
 	//
 	//fmt.Println("Balances after transaction:")
 	//getBalances(conn)
+}
+
+func getAllSheets(conn *pgx.Conn) []Sheet {
+	output := make([]Sheet, 0)
+
+	rows, err := conn.Query(context.Background(), "SELECT * FROM sheets")
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var s Sheet
+		if err := rows.Scan(&s.id, &s.versionNum, &s.creationTime, &s.payload, &s.isCurrentId, &s.tags); err != nil {
+			log.Fatal(err)
+		}
+
+		output = append(output, s)
+		fmt.Println("payload: " + s.payload.Title)
+		payload := Payload{}
+		payloadBytes, bytesError := json.Marshal(s.payload);
+		if bytesError != nil {
+			log.Println(err)
+		}
+
+		if err := json.Unmarshal(payloadBytes, &payload); err != nil {
+			log.Println(err)
+		}
+		fmt.Printf("%s | %s", payload.Title, payload.Scale)
+		fmt.Println("")
+		fmt.Println("")
+	}
+	return output
 }
 
 func getBalances(conn *pgx.Conn) {
