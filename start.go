@@ -2,19 +2,34 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
-	"github.com/cockroachdb/cockroach-go/v2/crdb/crdbpgx"
 	"log"
+	"time"
 
 	"github.com/jackc/pgx/v4"
 
 	"snow/db"
 )
 
+type Sheet struct {
+	id string
+	versionNum int
+	creationTime time.Time
+	payload string
+	isCurrentId bool
+	tags [3]string
+}
+
+type Payload struct {
+	Title string `json:"title"`
+	Scale string `json:"scale"`
+}
+
 func main() {
 	db.InitializeDatabaseProperties()
 
-	connectionString := fmt.Sprintf("postgres://%s:%s@%s:26257/bank?sslmode=verify-full&sslrootcert=%s&options=--cluster=%s",
+	connectionString := fmt.Sprintf("postgres://%s:%s@%s:26257/documents?sslmode=verify-full&sslrootcert=%s&options=--cluster=%s",
 		db.UserName, db.Password, db.Host, db.PathToCert, db.ClusterName)
 
 	fmt.Printf("\n \n Database Connection URL: %s \n \n", connectionString)
@@ -30,20 +45,38 @@ func main() {
 	}
 	defer conn.Close(context.Background())
 
-	fmt.Println("Initial balances:")
-	getBalances(conn)
-
-	err = crdbpgx.ExecuteTx(context.Background(), conn, pgx.TxOptions{}, func(tx pgx.Tx) error {
-		return transferFunds(context.Background(), tx, 1 /* from acct# */, 2 /* to acct# */, 100 /* amount */)
-	})
-	if err == nil {
-		fmt.Println("\nTransaction Successful\n ")
-	} else {
-		log.Fatal("error: ", err)
+	rows, err := conn.Query(context.Background(), "SELECT * FROM sheets")
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var s Sheet
+		if err := rows.Scan(&s.id, &s.versionNum, &s.creationTime, &s.payload, &s.isCurrentId, &s.tags); err != nil {
+			log.Fatal(err)
+		}
+		b, err := json.Marshal(s.payload)
+		if err != nil {
+			log.Fatal("Unable to marshall object into json...")
+		}
+		fmt.Printf("%s %d %s %v %v\n",s.id, s.versionNum, s.creationTime, s.isCurrentId, s.tags)
+		fmt.Println(string(b))
 	}
 
-	fmt.Println("Balances after transaction:")
-	getBalances(conn)
+	//fmt.Println("Initial balances:")
+	//getBalances(conn)
+	//
+	//err = crdbpgx.ExecuteTx(context.Background(), conn, pgx.TxOptions{}, func(tx pgx.Tx) error {
+	//	return transferFunds(context.Background(), tx, 1 /* from acct# */, 2 /* to acct# */, 100 /* amount */)
+	//})
+	//if err == nil {
+	//	fmt.Println("\nTransaction Successful\n ")
+	//} else {
+	//	log.Fatal("error: ", err)
+	//}
+	//
+	//fmt.Println("Balances after transaction:")
+	//getBalances(conn)
 }
 
 func getBalances(conn *pgx.Conn) {
