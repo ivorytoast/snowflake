@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/cockroachdb/cockroach-go/v2/crdb/crdbpgx"
 	"log"
 	"time"
 
@@ -45,14 +46,23 @@ func main() {
 	}
 	defer conn.Close(context.Background())
 
-	id := "aaabbb1a-c95a-11eb-b8bc-0242ac130003"
+	id := "555bbb1a-c95a-11eb-b8bc-0242ac130999"
 
-	revertCurrentIndForPreviousVersion(conn, id)
+	err = crdbpgx.ExecuteTx(context.Background(), conn, pgx.TxOptions{}, func(tx pgx.Tx) error {
+		return insertSheet(context.Background(), tx, id)
+	})
+	if err == nil {
+		fmt.Println("\nTransaction Successful\n ")
+	} else {
+		fmt.Printf("Transaction Not Successful. Error: %s \n", err)
+	}
 
-	//getMaxVersion(conn, id)
+	//getMaxVersion(conn, "555bbb1a-c95a-11eb-b8bc-0242ac130999")
 
-	//insertSheet(conn)
+	logSheetsAllSheetsUnderId(conn, id)
+}
 
+func logSheetsAllSheetsUnderId(conn *pgx.Conn, id string) {
 	sheets := getSheetsById(conn, id)
 
 	for _, sheet := range sheets {
@@ -66,67 +76,76 @@ func main() {
 		fmt.Println("")
 		fmt.Println("")
 	}
-
-
-
-	//fmt.Println("Initial balances:")
-	//getBalances(conn)
-	//
-	//err = crdbpgx.ExecuteTx(context.Background(), conn, pgx.TxOptions{}, func(tx pgx.Tx) error {
-	//	return transferFunds(context.Background(), tx, 1 /* from acct# */, 2 /* to acct# */, 100 /* amount */)
-	//})
-	//if err == nil {
-	//	fmt.Println("\nTransaction Successful\n ")
-	//} else {
-	//	log.Fatal("error: ", err)
-	//}
-	//
-	//fmt.Println("Balances after transaction:")
-	//getBalances(conn)
 }
 
-func insertSheet(conn *pgx.Conn) {
-	var p Payload
-	p.Title = "New Title One"
-	p.Scale = "New Scale One"
+func insertSheet(ctx context.Context, tx pgx.Tx, id string) error {
+
+	var currentVersion int
+
+	queryErr := tx.QueryRow(ctx,
+		"SELECT version_num FROM sheets WHERE (id, version_num) IN (SELECT id, MAX(version_num) FROM sheets GROUP BY id HAVING id = $1)", id).Scan(&currentVersion)
+
+	if queryErr != nil {
+		if queryErr.Error() == "no rows in result set" {
+			fmt.Println("No rows returned")
+			currentVersion = 0
+		} else {
+			return queryErr
+		}
+	}
+
+	fmt.Printf("Current Version: %d \n", currentVersion)
 
 	var s Sheet
-	s.id = "aaabbb1a-c95a-11eb-b8bc-0242ac130003"
-	s.versionNum = 3
+	s.id = id
+	s.versionNum = currentVersion + 1
 	s.creationTime = time.Now()
 	s.isCurrentId = true
-	s.tags = [3]string{"two", "eight", "four"}
-	valJson := "{\"title\":\"suppy\",\"scale\":\"luppy\"}"
-	if _, err := conn.Exec(context.Background(),
-		"INSERT INTO sheets (id, version_num, creation_time, is_current_ind, payload, tags) " +
-		"VALUES ($1, $2, $3, $4, $5, $6)", s.id, s.versionNum, s.creationTime, s.isCurrentId, valJson, s.tags); err != nil {
-		log.Fatal(err)
+	s.tags = [3]string{"three", "one", "eleven"}
+	valJson := "{\"title\":\"testTitle3\",\"scale\":\"testScale3\"}"
+
+	if _, insertErr := tx.Exec(ctx,
+		"INSERT INTO sheets (id, version_num, creation_time, is_current_ind, payload, tags) VALUES ($1, $2, $3, $4, $5, $6)",
+		s.id, s.versionNum, s.creationTime, s.isCurrentId, valJson, s.tags);
+	insertErr != nil {
+		return insertErr
 	}
+
+	if currentVersion > 1 {
+		if _, updateErr := tx.Exec(ctx, "UPDATE sheets SET is_current_ind = false WHERE id = $1 and version_num = $2", id, currentVersion);
+		updateErr != nil {
+			return updateErr
+		}
+	} else {
+		fmt.Println("No need to revert previous version since it is the first version")
+	}
+
+	return nil
 }
 
 func getMaxVersion(conn *pgx.Conn, id string) int {
 	var output int
 
-	err := conn.QueryRow(context.Background(), "SELECT version_num FROM sheets WHERE (id, version_num) IN" +
-		" (SELECT id, MAX(version_num) FROM sheets GROUP BY id HAVING id = $1)", id).Scan(&output)
+	row := conn.QueryRow(context.Background(), "SELECT version_num FROM sheets WHERE (id, version_num) IN" +
+		" (SELECT id, MAX(version_num) FROM sheets GROUP BY id HAVING id = $1)", id)
+	err := row.Scan(&output)
+
+	if row == nil {
+		fmt.Println("No rows returned")
+	}
+
 	if err != nil {
-		log.Fatal(err)
+		if err.Error() == "no rows in result set" {
+			fmt.Println("No rows returned")
+			return 0
+		} else {
+			log.Fatal("Unexpected error getting max version: " + err.Error())
+		}
 	}
 
 	fmt.Printf("%d", output)
 
 	return output
-}
-
-func revertCurrentIndForPreviousVersion(conn *pgx.Conn, id string) {
-	latestVersion := getMaxVersion(conn, id)
-
-	latestVersion = latestVersion - 1
-
-	if _, err := conn.Exec(context.Background(),
-		"UPDATE sheets SET is_current_ind = false WHERE id = $1 and version_num = $2", id, latestVersion); err != nil {
-		log.Fatal(err)
-	}
 }
 
 func getLatestVersions(conn *pgx.Conn, id string, versionNum int) []Sheet {
@@ -223,42 +242,4 @@ func getSheetsById(conn *pgx.Conn, id string) []Sheet {
 		fmt.Println("")
 	}
 	return output
-}
-
-func getBalances(conn *pgx.Conn) {
-	rows, err := conn.Query(context.Background(), "SELECT id, balance FROM accounts")
-	if err != nil {
-		log.Fatal(err)
-	}
-	defer rows.Close()
-	for rows.Next() {
-		var id, balance int
-		if err := rows.Scan(&id, &balance); err != nil {
-			log.Fatal(err)
-		}
-		fmt.Printf("%d %d\n", id, balance)
-	}
-}
-
-func transferFunds(ctx context.Context, tx pgx.Tx, from int, to int, amount int) error {
-	var fromBalance int
-	if err := tx.QueryRow(ctx,
-		"SELECT balance FROM accounts WHERE id = $1", from).Scan(&fromBalance); err != nil {
-		return err
-	}
-
-	if fromBalance < amount {
-		return fmt.Errorf("insufficient funds")
-	}
-
-	if _, err := tx.Exec(ctx,
-		"UPDATE accounts SET balance = balance - $1 WHERE id = $2", amount, from); err != nil {
-		return err
-	}
-
-	if _, err := tx.Exec(ctx,
-		"UPDATE accounts SET balance = balance + $1 WHERE id = $2", amount, to); err != nil {
-		return err
-	}
-	return nil
 }
